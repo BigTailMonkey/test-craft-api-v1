@@ -1,5 +1,6 @@
 import json  # 导入json模块，用于处理JSON数据
 import re  # 导入正则表达式模块
+import logging
 
 from openai import OpenAI, OpenAIError  # 从openai库导入OpenAI类和OpenAIError异常
 import tiktoken  # 导入tiktoken库，用于token计数
@@ -9,10 +10,9 @@ from flask import Blueprint  # 从flask库导入Blueprint，用于创建蓝图
 
 from app.config import Config  # 从app包导入Config配置类
 from app.decorators import query_params  # 从app包导入自定义装饰器query_params
-import htmlmin  # 导入htmlmin库，用于HTML压缩
+import minify_html as htmlmin  # 导入htmlmin库，用于HTML压缩
 
 config = Config()  # 实例化配置对象
-logger = Config.logger  # 获取日志记录器
 
 DEFAULT_MODEL = "deepseek-chat"  # 默认模型名称
 MODEL_SELECTION_ENABLED = False  # 是否允许模型选择
@@ -68,14 +68,14 @@ def is_prompt_length_valid(prompt, model=DEFAULT_MODEL):  # 判断prompt长度�
         encoding = tiktoken.encoding_for_model(model)  # 获取模型对应的编码器
     except KeyError:  # 如果模型名称无效
         encoding = tiktoken.encoding_for_model("gpt-4o")  # 使用gpt-4o编码器作为兜底
-        logger.log_text(f"Failed to get encoding for model {model}, falling back to gpt-4", severity="WARNING")  # 记录警告日志
+        # logger.log_text(f"Failed to get encoding for model {model}, falling back to gpt-4", severity="WARNING")  # 记录警告日志
 
     num_tokens = len(encoding.encode(prompt))  # 计算prompt的token数量
-    if config.ENVIRONMENT == "production":  # 如果是生产环境
-        logger.log_struct(
-            {"model": model, "tokens": num_tokens},  # 记录模型和token数
-            severity="INFO",
-        )
+    # if config.ENVIRONMENT == "production":  # 如果是生产环境
+    #     logger.log_struct(
+    #         {"model": model, "tokens": num_tokens},  # 记录模型和token数
+    #         severity="INFO",
+    #     )
     selected_model = get_model_by_name(model)  # 获取模型配置
     max_tokens = selected_model.get("tokens", MAX_TOKENS)  # 获取最大token数
     return 0 < max_tokens  # 不限制token使用量
@@ -93,9 +93,9 @@ def parse_html(source):  # 对HTML源码进行预处理，去除<script>标签�
         text = re.sub(
             pattern, "", source, flags=(re.IGNORECASE | re.MULTILINE | re.DOTALL)  # 替换所有<script>标签为空
         )
-        html = htmlmin.minify(text, remove_comments=True, remove_empty_space=True)  # 压缩HTML，去除注释和空格
+        html = htmlmin.minify(text)  # 压缩HTML，去除注释和空格
     except Exception as e:  # 捕获异常
-        print(f"Error parsing HTML: {e}")  # 打印错误信息
+        logging.error(f"Error parsing HTML: {e}")  # 打印错误信息
         html = source  # 出错时返回原始HTML
     return html  # 返回处理后的HTML
 
@@ -103,19 +103,21 @@ def parse_html(source):  # 对HTML源码进行预处理，去除<script>标签�
 def call_openai_api(prompt, role, isStream, model="", key=""):  # 调用OpenAI接口，支持流式和非流式返回
     if not model:  # 如果未指定模型
         model = DEFAULT_MODEL  # 使用默认模型
+    
+    logging.info(f"call_openai_api")
 
     if not key:  # 如果未指定API KEY
         key = config.API_KEY  # 使用配置中的API KEY
-        client = OpenAI(api_key=key, organization="org-vrjw201KSt5hgeiFuytTSaHb")  # 创建OpenAI客户端，组织ID需替换为自己的
+        client = OpenAI(api_key=key, base_url=config.AI_SERVER_URL)  # 创建OpenAI客户端，组织ID需替换为自己的
     else:
-        client = OpenAI(api_key=key)  # 创建OpenAI客户端
+        client = OpenAI(api_key=key, base_url=config.AI_SERVER_URL)  # 创建OpenAI客户端
 
-    if not is_prompt_length_valid(prompt, model):  # 如果prompt过长
-        if config.ENVIRONMENT == "production":  # 生产环境记录日志
-            logger.log_text("Prompt too large", severity="INFO")
-        return jsonify({"error": "The prompt is too long."}), 413  # 返回错误响应
+    # if not is_prompt_length_valid(prompt, model):  # 如果prompt过长
+    #     # if config.ENVIRONMENT == "production":  # 生产环境记录日志
+    #     #     logger.log_text("Prompt too large", severity="INFO")
+    #     return jsonify({"error": "The prompt is too long."}), 413  # 返回错误响应
 
-    print(f"Model: {model}")  # 打印当前模型
+    logging.debug(f"Model: {model}")  # 打印当前模型
 
     try:
         if model == "o1-mini":  # 如果是o1-mini模型
@@ -124,7 +126,7 @@ def call_openai_api(prompt, role, isStream, model="", key=""):  # 调用OpenAI�
             ]
         else:
             messages = [
-                {"role": "developer", "content": role},  # 先传递开发者角色
+                {"role": "system", "content": role},  # 先传递开发者角色
                 {"role": "user", "content": prompt},  # 再传递用户内容
             ]
 
@@ -169,19 +171,22 @@ def ping():  # 健康检查接口
 @api.route("/api/models", methods=["GET"])  # 定义/models接口，GET方法
 def models():  # 获取支持的模型列表
     open_ai_api_key = request.args.get("open_ai_api_key", "")  # 获取请求参数中的API KEY
+
+    logging.info(f"open_ai_api_key: {open_ai_api_key}")
+
     if open_ai_api_key == "":  # 如果未提供API KEY
         open_ai_api_key = config.API_KEY  # 使用配置中的API KEY
         client = OpenAI(
-            api_key=open_ai_api_key, organization="org-vrjw201KSt5hgeiFuytTSaHb"  # 创建OpenAI客户端
+            api_key=open_ai_api_key, base_url=config.AI_SERVER_URL  # 创建OpenAI客户端
         )
     else:
-        client = OpenAI(api_key=open_ai_api_key)  # 创建OpenAI客户端
+        client = OpenAI(api_key=open_ai_api_key, base_url=config.AI_SERVER_URL)  # 创建OpenAI客户端
     response = client.models.list()  # 获取模型列表
     models_list = response.model_dump().get("data")  # 获取模型数据
     filtered_list = [
         {"label": f"{model['label']}", "id": model["name"]}  # 构造返回的模型信息
         for model in SUPPORTED_MODELS
-        if any(model["name"] == openai_model["id"] for openai_model in models_list)  # 只返回支持的模型
+        if models_list and any(model["name"] == openai_model["id"] for openai_model in models_list)  # 只返回支持的模型且确保models_list不为None
     ]
     response = {
         "models": filtered_list,  # 支持的模型列表
@@ -197,36 +202,37 @@ def generate_ideas(source_code, stream=True, open_ai_api_key="", model=""):  # �
     if not is_valid_html(source_code):  # 判断HTML是否合法
         return jsonify({"error": ERROR_INVALID_ELEMENT}), 400  # 不合法返回错误
 
-    if config.ENVIRONMENT == "production":  # 生产环境记录日志
-        logger.log_struct(
-            {
-                "mode": "Ideas",
-                "model": model,
-            },
-            severity="INFO",
-        )  # 记录日志，包含模式和模型信息
+    logging.info(f"generate_ideas")
+    
+    # if config.ENVIRONMENT == "production":  # 生产环境记录日志
+        # logger.log_struct(
+        #     {
+        #         "mode": "Ideas",
+        #         "model": model,
+        #     },
+        #     severity="INFO",
+        # )  # 记录日志，包含模式和模型信息
 
-    role = "You are a Software Test Consultant"  # 设置角色为软件测试顾问
+    role = "你是一名优秀的软件测试顾问，精通web应用测试，并且拥有充足的前端知识储备，在边界测试方便特别擅长。"  # 设置角色为软件测试顾问
 
     prompt = f"""
-        Generate test ideas based on the HTML element below. Think this step by step, as a real Tester would.
-        Focus on user-oriented tests that do not refer to HTML elements such as divs or classes.
-        Include negative tests and creative test scenarios.
-        Format the output as unordered lists, with a heading for each required list, such as Positive Tests
-         or Negative Tests. Don't include any other heading.
+        根据以下HTML元素生成测试思路。请像真正的测试人员一样逐步思考：
+        专注于用户导向的测试，避免涉及div或class等HTML元素。
+        包含负面测试和创造性测试场景。
+        以无序列表形式输出，每个必要列表需带标题（如"正向测试"或"负面测试"），不要包含其他标题。
         HTML:
         ```
         {parse_html(source_code)}
         ```
 
-        Format the output as the following example:
-        Positive Tests:
+        按以下示例格式输出：
+        正向测试：
         <Idea 1>
-
-        Negative Tests:
+        
+        负面测试：
         <Idea 1>
-
-        Creative Test Scenarios:
+        
+        创意测试场景：
         <Idea 1>
         """  # 构造prompt，要求生成不同类型的测试思路
 
@@ -248,39 +254,39 @@ def automate_tests(
     if not is_valid_html(source_code):  # 判断HTML是否合法
         return jsonify({"error": ERROR_INVALID_ELEMENT}), 400  # 不合法返回错误
 
-    if config.ENVIRONMENT == "production":  # 生产环境记录日志
-        logger.log_struct(
-            {
-                "mode": "Automate",
-                "language": language,
-                "framework": framework,
-                "pom": pom,
-                "model": model,
-            },
-            severity="INFO",
-        )  # 记录日志，包含自动化相关参数
+    # if config.ENVIRONMENT == "production":  # 生产环境记录日志
+        # logger.log_struct(
+        #     {
+        #         "mode": "Automate",
+        #         "language": language,
+        #         "framework": framework,
+        #         "pom": pom,
+        #         "model": model,
+        #     },
+        #     severity="INFO",
+        # )  # 记录日志，包含自动化相关参数
 
-    role = "You are a Test Automation expert"  # 设置角色为自动化测试专家
+    role = "你是一个专业的自动化测试专家，精通自动化测试，拥有充足的知识储备"  # 设置角色为自动化测试专家
 
     prompt = f"""
-    Generate {framework} tests using {language} based on the html element below.
-    Use {base_url} as the baseUrl. Generate as much tests as possible.
-    Always try to add assertions.
-    Do not include explanatory or introductory text. The output must be all {language} code.
-    Format the code in a plain text format without using triple backticks.
+        基于下面的html元素，使用{language}生成{framework}测试。
+        以{base_url}作为baseUrl。尽可能多地生成测试。
+        始终尝试添加断言。
+        不要包含解释性或介绍性文字。输出必须全部是{language}代码。
+        代码格式为纯文本格式，不使用三个反引号。
     """  # 构造prompt，要求生成自动化测试代码
 
     if framework == "playwright":  # 如果框架为playwright
         prompt += """
-    Use playwright/test library.
-    """  # 补充playwright相关说明
+            使用playwright/test库.
+        """  # 补充playwright相关说明
 
     if pom:  # 如果需要生成POM结构
         prompt += """
-    Create page object models and use them in the tests.
-    Selectors must be encapsulated in properties. Actions must be encapsulated in methods.
-    Include a comment to indicate where each file starts.
-    """  # 补充POM相关说明
+            创建页面对象模型并在测试中使用它们。
+            选择器必须封装在属性中。操作必须封装在方法中。
+            包含注释以标识每个文件的起始位置。
+        """  # 补充POM相关说明
 
     prompt += f"""
     Html:
@@ -308,52 +314,52 @@ def automate_tests_ideas(
     if not is_valid_html(source_code):  # 判断HTML是否合法
         return jsonify({"error": ERROR_INVALID_ELEMENT}), 400  # 不合法返回错误
 
-    if config.ENVIRONMENT == "production":  # 生产环境记录日志
-        logger.log_struct(
-            {
-                "mode": "Automate-Ideas",
-                "language": language,
-                "framework": framework,
-                "pom": pom,
-                "model": model,
-            },
-            severity="INFO",
-        )  # 记录日志，包含自动化相关参数
+    # if config.ENVIRONMENT == "production":  # 生产环境记录日志
+        # logger.log_struct(
+        #     {
+        #         "mode": "Automate-Ideas",
+        #         "language": language,
+        #         "framework": framework,
+        #         "pom": pom,
+        #         "model": model,
+        #     },
+        #     severity="INFO",
+        # )  # 记录日志，包含自动化相关参数
 
-    role = "You are a Test Automation expert"  # 设置角色为自动化测试专家
+    role = "你是一个专业的自动化测试专家，精通自动化测试，拥有充足的知识储备"  # 设置角色为自动化测试专家
     line_tab = "\n\t"  # 定义换行和缩进
     prompt = f"""
-    Using the following html:
+        基于下面的html元素:
 
-    Html:
-    ```
-    {parse_html(source_code)}
-    ```
+        Html:
+        ```
+        {parse_html(source_code)}
+        ```
 
-    Generate {framework} tests using {language} for the following Test Cases:
+        使用{language}生成{framework}测试用例:
 
-    TestCases:
-    ```
+        TestCases:
+        ```
         {line_tab.join(ideas)}
-    ```
+        ```
 
-    Use {base_url} as the baseUrl.
-    Always try to add assertions.
-    Do not include explanatory or introductory text. The output must be all {language} code.
-    Format the code in a plain text format without using triple backticks.
+        以{base_url}作为baseUrl。
+        始终尝试添加断言。
+        禁止包含任何解释性或说明性文字。输出必须全部是{language}代码。
+        请使用纯文本格式编写代码，不要使用三个反引号标记。
     """  # 构造prompt，包含测试思路和HTML内容
 
     if framework == "playwright":  # 如果框架为playwright
         prompt += """
-    Use playwright/test library.
-    """  # 补充playwright相关说明
+        使用 Playwright/Test 库。
+        """  # 补充playwright相关说明
 
     if pom:  # 如果需要生成POM结构
         prompt += """
-    Create page object models and use them in the tests.
-    Selectors must be encapsulated in properties. Actions must be encapsulated in methods.
-    Include a comment to indicate where each file starts.
-    """  # 补充POM相关说明
+        创建页面对象模型并在测试中使用它们。
+        选择器必须封装在属性中，操作必须封装在方法中。
+        包含注释以标识每个文件的起始位置。
+        """  # 补充POM相关说明
 
     return call_openai_api(prompt, role, stream, key=open_ai_api_key, model=model)  # 调用OpenAI接口获取自动化测试代码
 
@@ -364,50 +370,49 @@ def check_accessibility(source_code, stream=True, open_ai_api_key="", model=""):
     if not is_valid_html(source_code):  # 判断HTML是否合法
         return jsonify({"error": ERROR_INVALID_ELEMENT}), 400  # 不合法返回错误
 
-    if config.ENVIRONMENT == "production":  # 生产环境记录日志
-        logger.log_struct(
-            {
-                "mode": "Ideas",
-                "model": model,
-             },
-            severity="INFO",
-        )  # 记录日志，包含模式和模型信息
+    # if config.ENVIRONMENT == "production":  # 生产环境记录日志
+        # logger.log_struct(
+        #     {
+        #         "mode": "Ideas",
+        #         "model": model,
+        #      },
+        #     severity="INFO",
+        # )  # 记录日志，包含模式和模型信息
 
-    role = "You are an expert on Web Accessibility"  # 设置角色为Web可访问性专家
+    role = "你是一个Web服务可访问性专家"  # 设置角色为Web可访问性专家
 
     prompt = f"""
-        Check the HTML element below for accessibility issues according to WCAG 2.1.
-        Think about this step by step. First, assess the element against each criterion.
-        Then, report the result in the format specified below.
-        For the criteria that cannot be assessed just by looking at the HTML, create accessibility tests.
-        In the report, each criteria must be a link to the reference documentation.
+        根据 WCAG 2.1 检查以下 HTML 元素的可访问性问题。
+        逐步思考：首先，对照每个标准评估该元素。然后，按以下指定格式报告结果。
+        对于无法仅通过查看 HTML 进行评估的标准，创建可访问性测试。
+        在报告中，每个标准必须是指向参考文档的链接。
 
         Html:
         ```
         {source_code}
         ```
 
-        Format the output as the following example:
-        - Issues
-        - Conformance Level A -
-        - Issue:
-        - Criteria:
-        - Solution:
+        将输出格式设置为以下示例：  
+        - 问题  
+        - 符合级别A -  
+        - 问题：  
+        - 标准：  
+        - 解决方案：  
 
-        - Conformance Level AA -
-        - Issue:
-        - Criteria:
-        - Solution:
+        - 符合级别AA -  
+        - 问题：  
+        - 标准：  
+        - 解决方案：  
 
-        - Conformance Level AAA -
-        - Issue:
-        - Criteria:
-        - Solution:
+        - 符合级别AAA -  
+        - 问题：  
+        - 标准：  
+        - 解决方案：  
 
-        - Suggested Tests
-        - Test:
-        - Criteria:
-        - Test Details:
+        - 建议测试  
+        - 测试：  
+        - 标准：  
+        - 测试详情：
         """  # 构造prompt，要求检查HTML可访问性并输出分级报告
 
     return call_openai_api(prompt, role, stream, key=open_ai_api_key, model=model)  # 调用OpenAI接口获取可访问性报告
@@ -416,25 +421,25 @@ def check_accessibility(source_code, stream=True, open_ai_api_key="", model=""):
 @api.route("/api/get-regex-for-run", methods=["POST"])  # 定义/get-regex-for-run接口，POST方法
 @query_params()  # 使用自定义装饰器
 def get_regex_for_run(tests, requirement, open_ai_api_key="", model=""):  # 根据测试用例和需求生成正则表达式
-    role = "You are a Test Automation expert"  # 设置角色为自动化测试专家
+    role = "你是一个专业的自动化测试专家，精通自动化测试，拥有充足的知识储备"  # 设置角色为自动化测试专家
 
     prompt = f"""
-        I have a Mocha test framework.
-        I need you to create a regular expression to include in a grep command to run tests.
+        我有一个Mocha测试框架。  
+        我需要你创建一个正则表达式，以包含在grep命令中运行测试。  
+        
+        以下是两部分内容：  
+        - 一个包含套件（suites）的JSON，每个套件包含测试名称数组。  
+        - 创建grep命令的用户需求  
+        
+        你需要执行以下操作：  
+        1. 检查每个套件名称。如果与用户需求直接相关，将其添加到正则表达式中。  
+        2. 检查每个测试名称。如果与用户需求直接相关，将其添加到正则表达式中。  
+        
+        仅回复正则表达式。  
+        如果用户需求与任何套件或测试无关，回复“.*”以运行所有测试。  
+        使用示例响应的格式。  
 
-        Below you will find two things:
-        - A JSON with suites, each containing an array of test names.
-        - A User Requirement to create the grep command
-
-        You will have to do the following:
-        1. Review each suite name. If directly related to the User Requirement, add it to the regular expression.
-        2. Review each test name. If directly related to the User Requirement, add it to the regular expression.
-
-        Only respond with the regular expression.
-        If the User Requirement is not related to any suite or test, respond with ".*" to run all the tests.
-        Use the format of the example response.
-
-        Example response:
+        示例响应：  
         Regex: Add User|Update User|Patch User
 
         JSON
