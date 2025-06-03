@@ -155,8 +155,9 @@ def call_openai_api(prompt, role, isStream, model="", key=""):  # 调用OpenAI�
 
         return Response(generate(), mimetype="text/event-stream")  # 返回流式响应
     except OpenAIError as e:  # 捕获OpenAI异常
-        print(f"Error: {e}")  # 打印错误信息
-        return jsonify({"error": str(e.message)}), e.status_code  # 返回错误响应
+        logging.error(f"Error: {e}")  # 打印错误信息
+        # return jsonify({"error": str(e.message)}), e.status_code  # 返回错误响应
+        return jsonify({"error": str(e)})  # 返回错误响应
 
 
 api = Blueprint("api", __name__)  # 创建Flask蓝图对象
