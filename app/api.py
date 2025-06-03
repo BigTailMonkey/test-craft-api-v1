@@ -83,7 +83,7 @@ def is_prompt_length_valid(prompt, model=DEFAULT_MODEL):  # 判断prompt长度�
 
 
 def is_valid_html(source_code):  # 判断输入的源码是否为有效HTML元素
-    pattern = "^<(\w+).*?>.*$"  # 匹配HTML标签的正则表达式
+    pattern = r"^<(\w+).*?>.*$"  # 匹配HTML标签的正则表达式
     return bool(re.match(pattern, source_code.strip(), flags=re.DOTALL))  # 使用正则判断
 
 
@@ -217,9 +217,12 @@ def generate_ideas(source_code, stream=True, open_ai_api_key="", model=""):  # �
 
     prompt = f"""
         根据以下HTML元素生成测试思路。请像真正的测试人员一样逐步思考：
-        专注于用户导向的测试，避免涉及div或class等HTML元素。
-        包含负面测试和创造性测试场景。
-        以无序列表形式输出，每个必要列表需带标题（如"正向测试"或"负面测试"），不要包含其他标题。
+            - 专注于用户导向的测试，避免涉及div或class等HTML元素。
+            - 识别所有用户可见的输入/输出节点（如：文本输入框、操作按钮、状态提示区）
+            - 标记存在业务约束的交互点（如：数值范围限制、格式校验规则）
+            - 发现隐式状态依赖（如：步骤顺序依赖、会话有效期）
+            - 包含正面测试、负面测试、创造性测试场景，正面测试和负面测试场景下不少于10个测试用例，创意测试给出最具创意性的3个。
+            - 以无序列表形式输出，每个必要列表需带标题（如"正向测试"或"负面测试"），不要包含其他标题。
         HTML:
         ```
         {parse_html(source_code)}
