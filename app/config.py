@@ -10,7 +10,7 @@ class Config:
 
     PROJECT_ID = os.environ.get("PROJECT_ID")
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
-    API_KEY = os.environ.get("OPENAI_API_KEY","sk-8d798d970400496c8071d92f7eb959b7")
+    API_KEY = os.environ.get("OPENAI_API_KEY")
     LOG_NAME = "openai-api-proxy-log"
     AI_SERVER_URL = os.environ.get("AI_SERVER_URL","https://api.deepseek.com")  # 默认API地址
 

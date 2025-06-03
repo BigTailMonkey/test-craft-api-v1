@@ -68,7 +68,7 @@ def is_prompt_length_valid(prompt, model=DEFAULT_MODEL):  # 判断prompt长度�
         encoding = tiktoken.encoding_for_model(model)  # 获取模型对应的编码器
     except KeyError:  # 如果模型名称无效
         encoding = tiktoken.encoding_for_model("gpt-4o")  # 使用gpt-4o编码器作为兜底
-        # logger.log_text(f"Failed to get encoding for model {model}, falling back to gpt-4", severity="WARNING")  # 记录警告日志
+        logging.warning(f"Failed to get encoding for model {model}, falling back to gpt-4")  # 记录警告日志
 
     num_tokens = len(encoding.encode(prompt))  # 计算prompt的token数量
     # if config.ENVIRONMENT == "production":  # 如果是生产环境
@@ -156,8 +156,7 @@ def call_openai_api(prompt, role, isStream, model="", key=""):  # 调用OpenAI�
         return Response(generate(), mimetype="text/event-stream")  # 返回流式响应
     except OpenAIError as e:  # 捕获OpenAI异常
         logging.error(f"Error: {e}")  # 打印错误信息
-        # return jsonify({"error": str(e.message)}), e.status_code  # 返回错误响应
-        return jsonify({"error": str(e)})  # 返回错误响应
+        return jsonify({"error": str(e.message)}), e.status_code  # 返回错误响应
 
 
 api = Blueprint("api", __name__)  # 创建Flask蓝图对象
